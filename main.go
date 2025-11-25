@@ -47,7 +47,7 @@ func _main() error {
 
 	defer fIn.Close()
 
-	gen := generator.New(fIn)
+	gen := generator.New(path, fIn)
 
 	data, err := gen.Generate()
 	if err != nil {

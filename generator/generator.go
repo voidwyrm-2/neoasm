@@ -139,25 +139,36 @@ type Generator struct {
 	err       error
 	labels    map[string]int
 	resols    map[string][]int
+	file      string
 	buf       []byte
 	ln, col   int
 	cur, next byte
 	eof       bool
 }
 
-func New(r io.Reader) Generator {
+func New(file string, r io.Reader) Generator {
 	g := Generator{
 		r:      r,
 		labels: map[string]int{},
 		resols: map[string][]int{},
+		file:   file,
 		ln:     1,
-		col:    1,
 	}
 
 	g.byte()
 	g.byte()
 
+	g.col = 1
+
 	return g
+}
+
+func (g *Generator) Errfp(ln, col int, msg string, a ...any) error {
+	return fmt.Errorf("%s:%d:%d: %s", g.file, ln, col, fmt.Sprintf(msg, a...))
+}
+
+func (g *Generator) Errf(msg string, a ...any) error {
+	return g.Errfp(g.ln, g.col, msg, a...)
 }
 
 func (g *Generator) end() bool {
@@ -182,7 +193,7 @@ func (g *Generator) byte() {
 	}
 }
 
-func (g *Generator) collectHex() int {
+func (g *Generator) collectHex(ln, col int) int {
 	i := 0
 
 	fromHex := func(hc byte) byte {
@@ -202,7 +213,7 @@ func (g *Generator) collectHex() int {
 		g.byte()
 
 		if g.end() || !isHex(g.cur) {
-			g.err = fmt.Errorf("Invalid number")
+			g.err = g.Errfp(ln, col, "Invalid number")
 
 			return 0
 		}
@@ -216,7 +227,7 @@ func (g *Generator) collectHex() int {
 	}
 
 	if isHex(g.cur) {
-		g.err = fmt.Errorf("Invalid number")
+		g.err = g.Errfp(ln, col, "Invalid number")
 	}
 
 	return i
@@ -234,17 +245,23 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 	for {
 		switch g.cur {
 		case '(':
-			for !g.end() && g.cur != ')' {
+			{
+				ln, col := g.ln, g.col
+
+				for !g.end() && g.cur != ')' {
+					g.byte()
+				}
+
+				if g.cur != ')' {
+					g.err = g.Errfp(ln, col, "Unterminated comment")
+				}
+
 				g.byte()
 			}
-
-			if g.cur != ')' {
-				g.err = fmt.Errorf("Unterminated comment")
-			}
-
-			g.byte()
 		case ';':
 			{
+				ln, col := g.ln, g.col
+
 				sb := strings.Builder{}
 
 				g.byte()
@@ -255,7 +272,7 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 				}
 
 				if sb.Len() == 0 {
-					g.err = fmt.Errorf("Label literals cannot be empty")
+					g.err = g.Errfp(ln, col, "Label literals cannot be empty")
 				}
 
 				sym := sb.String()
@@ -265,6 +282,8 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 			}
 		case '@':
 			{
+				ln, col := g.ln, g.col
+
 				sb := strings.Builder{}
 
 				g.byte()
@@ -275,14 +294,14 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 				}
 
 				if sb.Len() == 0 {
-					g.err = fmt.Errorf("Label definitions cannot be empty")
+					g.err = g.Errfp(ln, col, "Label definitions cannot be empty")
 					return
 				}
 
 				sym := sb.String()
 
 				if _, ok := g.labels[sym]; ok {
-					g.err = fmt.Errorf("Cannot redefine label '%s'", sym)
+					g.err = g.Errfp(ln, col, "Cannot redefine label '%s'", sym)
 					return
 				}
 
@@ -290,6 +309,8 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 			}
 		case '\'':
 			{
+				ln, col := g.ln, g.col
+
 				g.byte()
 
 				n := 0
@@ -302,19 +323,21 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 
 				if n == 0 {
 
-					g.err = fmt.Errorf("String literals cannot empty")
+					g.err = g.Errfp(ln, col, "String literals cannot empty")
 					return
 				}
 			}
 		case '#':
 			{
+				ln, col := g.ln, g.col
+
 				g.byte()
 
 				g.buf = append(g.buf, inLit)
 
 				ins := &g.buf[len(g.buf)-1]
 
-				n := g.collectHex()
+				n := g.collectHex(ln, col)
 
 				switch n {
 				case 2:
@@ -331,8 +354,10 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 			if unicode.IsSpace(rune(g.cur)) {
 				g.byte()
 			} else if isHex(g.cur) {
-				g.collectHex()
+				g.collectHex(g.ln, g.col)
 			} else if isSymbol(g.cur) {
+				ln, col := g.ln, g.col
+
 				r := false
 				var s uint8
 				sb := strings.Builder{}
@@ -374,13 +399,13 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 
 				ins, usesR, usesS, ok := getIns(name)
 				if !ok {
-					g.err = fmt.Errorf("Unknown symbol '%s'", name)
+					g.err = g.Errfp(ln, col, "Unknown symbol '%s'", name)
 					return
 				} else if !usesR && r {
-					g.err = fmt.Errorf("Instruction '%s' is incompatible with the return modifier", name)
+					g.err = g.Errfp(ln, col, "Instruction '%s' is incompatible with the return modifier", name)
 					return
 				} else if !usesS && s != 0 {
-					g.err = fmt.Errorf("Instruction '%s' is incompatible with the size modifier", name)
+					g.err = g.Errfp(ln, col, "Instruction '%s' is incompatible with the size modifier", name)
 					return
 				}
 
@@ -390,7 +415,7 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 
 				g.buf = append(g.buf, ins|s)
 			} else {
-				g.err = fmt.Errorf("Unexpected character '%c' (%d)", g.cur, g.cur)
+				g.err = g.Errf("Unexpected character '%c' (%d)", g.cur, g.cur)
 				return
 			}
 		}
@@ -403,7 +428,7 @@ func (g *Generator) Generate() (rbuf []byte, rerr error) {
 	for sym, pos := range g.labels {
 		if res, ok := g.resols[sym]; ok {
 			for _, idx := range res {
-				binary.BigEndian.PutUint32(unsafe.Slice(&g.buf[idx], 4), uint32(addressOffset-len(g.buf)+pos-1))
+				binary.BigEndian.PutUint32(unsafe.Slice(&g.buf[idx], 4), uint32(addressOffset-len(g.buf)+pos))
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: label '%s' is unused\n", sym)
