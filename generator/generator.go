@@ -30,7 +30,7 @@ const (
 	inRot
 	inPop
 	inSth
-	insGpc
+	inGpc
 	inMemr
 	inMemw
 	inMemc
@@ -80,7 +80,7 @@ func getIns(name string) (ins uint8, usesR, usesS, ok bool) {
 	case "STH":
 		ins = inSth
 	case "GPC":
-		ins = insGpc
+		ins = inGpc
 		usesS = false
 	case "MEMR":
 		ins = inMemr
